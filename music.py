@@ -6,24 +6,23 @@ from view import MusicView
 from dotenv import load_dotenv
 from collections import deque
 from youtubesearchpython import VideosSearch
-from dataclasses import dataclass
-from source import _source
 from data import adata
 from check import check_youtube_video
+from typing import List, Deque, Dict
 
 
 load_dotenv() 
 bot = discord.Bot()
 
-voice_client={}
-queue=deque()
-source_url=''
+voice_client:Dict= {}
+queue:Deque= deque()
+source_url:str= ""
+current:List= []
 
 _FFMPEG_OPTIONS = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5', 
     'options': '-vn'
     }
-
 
 @bot.event
 async def on_ready():
@@ -90,8 +89,10 @@ async def next(ctx: discord.ApplicationContext) -> None:
         await ctx.channel.send(
             f"正在播放 **{item[1]['title']}**", 
             embed=embed,
-            view=MusicView(vc.is_paused(), item[1]['url'])
+            view=MusicView(vc.is_paused(), source_url)
             )
+    else:
+        await ctx.channel.send("**queue is empty<:whiteexclamationmark_2755:1311298893866340362>**")
 
 async def play_music(ctx : discord.ApplicationContext) -> None:
     """
@@ -112,11 +113,11 @@ async def play_music(ctx : discord.ApplicationContext) -> None:
                 color=discord.Color.blue()
                 )
             embed.add_field(
-                name="💿duraction",
+                name="🎶duraction",
                 value=f"> **{item[1]['length']}**"
                 )
             embed.add_field(
-                name="👀views",
+                name="🕶️views",
                 value=f"> **{item[1]['views']}**"
                 )
             embed.add_field(
@@ -126,15 +127,14 @@ async def play_music(ctx : discord.ApplicationContext) -> None:
             embed.set_thumbnail(url=item[1]['thumbnail'])
             
             await ctx.channel.send(
-                f"正在播放 **{item[1]['title']}**", 
-                embed=embed,
-                view=MusicView(vc.is_paused(), item[1]['url'])
-                )
-
+                    f"⚙️ now playing **{item[1]['title']}** ...", 
+                    embed=embed,
+                    view=MusicView(vc.is_paused(), item[1]['url'])
+                    )
 
 @bot.slash_command(
-    name="撥放",
-    description="撥放音樂"
+    name="play",
+    description="play music"
 )
 async def play(
         ctx: discord.ApplicationContext, 
@@ -146,41 +146,36 @@ async def play(
     :return: None
     """
     await ctx.response.defer(invisible=False)
+    global current
     if not ctx.author.voice:
-        return await ctx.respond("請先加入語音頻道")
+        return await ctx.respond("**Please join the voice channel first.**")
     
     if voice_client:
         if ctx.author.voice.channel.id not in voice_client.keys(): 
-            return await ctx.respond("✖️ 機器人已加入語音頻道，請在正確的語音頻道上執行此指令")
+            return await ctx.respond("<:multiply_2716fe0f:1311300000822857789> **The bot has joined the voice channel, execute this command on the correct voice channel.**")
         else:
             result= search(query)
+            current=[query, result]
             queue.append([query, result])
-            await ctx.respond("✔️已將歌曲加入播放清單")
-            await play_music(ctx)
+            
+            await asyncio.gather(
+                ctx.respond("<:checkmark_2714fe0f:1311300012227166268> **The song has been played.**"), 
+                play_music(ctx)
+            )
     else:     
         vc = await ctx.author.voice.channel.connect()
         voice_client[ctx.author.voice.channel.id]=vc
         result= search(query)
-        queue.append([query, result])
-        await ctx.respond("✔️已將歌曲加入播放清單")
-        await play_music(ctx)
-
-@bot.slash_command(
-    name="重複循環",
-    description="重複循環播放音樂"
-)
-async def repeat(
-        ctx: discord.ApplicationContext
-    ) -> None:
-    """
-    :param ctx:discord.ApplicationContext
-    :return: None
-    """
-    if voice_client:
-        if ctx.author.voice.channel.id in voice_client.keys(): 
-            vc=voice_client[ctx.author.voice.channel.id]
-            vc.stop()
-            await ctx.respond("✔️已停止播放")
+        if result:
+            current=[query, result]
+            queue.append([query, result])
+        else:
+            return await ctx.respond(f"**<:multiply_2716fe0f:1311300000822857789> The video could not be found ...**")
+        
+        await asyncio.gather(
+            ctx.respond("<:checkmark_2714fe0f:1311300012227166268> **The song has been played.**"), 
+            play_music(ctx)
+        )
 
 @bot.event
 async def on_interaction(interaction: discord.Interaction) -> None:
@@ -211,7 +206,16 @@ async def on_interaction(interaction: discord.Interaction) -> None:
             vc=voice_client[interaction.user.voice.channel.id]
             vc.stop()
             await interaction.response.edit_message(view=MusicView(False, source_url))
-            
+
+        elif interaction.data["custom_id"] == "repeat":
+            vc=voice_client[interaction.user.voice.channel.id]
+            queue.appendleft(current)
+            vc.stop()
+            try:
+                await interaction.response.edit_message(view=MusicView(False, source_url))
+                print("repeat")
+            except discord.errors.InteractionResponded as e:
+                print(e)
             
     await bot.process_application_commands(interaction)
 

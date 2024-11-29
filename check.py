@@ -25,7 +25,7 @@ def check_youtube_video(url) -> bool | DownloadError:
             if 'id' in info_dict:
                 return True
             else:
-                print("影片無效")
+                return False
     
     except yt_dlp.utils.DownloadError as e:
         return e

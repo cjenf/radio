@@ -24,9 +24,28 @@ class MusicView(ui.View):
                 ),
             ui.Button(
                 style=discord.ButtonStyle.grey,
-                label='⟲',
+                label='  ',
                 custom_id="repeat",
+                emoji="<:repeat:1313123030440087614>"
                 ),
+            ui.Button(
+                style=discord.ButtonStyle.grey,
+                label='  ',
+                custom_id="stop",
+                emoji="<:stop:1313127544442191924>"
+            ),
+            ui.Button(
+                style=discord.ButtonStyle.grey,
+                label='  ',
+                custom_id="soundplus",
+                emoji="<:plus:1313424588197335071>"
+            ),
+            ui.Button(
+                style=discord.ButtonStyle.grey,
+                label='  ',
+                custom_id="soundminus",
+                emoji="<:minus:1313481477471862824>"
+            ),
             ui.Button(
                 style=discord.ButtonStyle.link,
                 label='link',

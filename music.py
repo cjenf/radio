@@ -20,6 +20,7 @@ queue:Deque= deque()
 source_url:str= ""
 current:List= []
 Embed:discord.Embed= discord.Embed()
+asource:discord.PCMVolumeTransformer= ''
 
 _FFMPEG_OPTIONS = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5', 
@@ -69,6 +70,7 @@ def id(url:str):
     parsed_url = urlparse(url)
     query_params = parse_qs(parsed_url.query)
     return query_params.get("v", [None])[0]
+
     
 async def next(ctx: discord.ApplicationContext) -> None:
     """
@@ -80,9 +82,12 @@ async def next(ctx: discord.ApplicationContext) -> None:
     if queue:
         item=queue.popleft()
         vc=voice_client[ctx.author.voice.channel.id]
-        global source_url, Embed
+        global source_url, Embed, asource
         source_url=item[1][0]['url']
-        vc.play(discord.FFmpegPCMAudio(item[1][1], **_FFMPEG_OPTIONS), after=lambda e: print(e) if e else asyncio.run_coroutine_threadsafe(next(ctx), bot.loop))
+        esource=discord.PCMVolumeTransformer(discord.FFmpegPCMAudio(item[1][1], **_FFMPEG_OPTIONS))
+        esource.volume=0.5
+        asource=esource
+        vc.play(esource, after=lambda e: print(e) if e else asyncio.run_coroutine_threadsafe(next(ctx), bot.loop))
         embed=discord.Embed(
             title=f"**{item[1][0]['title']}**",
             color=discord.Color.blue()
@@ -107,7 +112,21 @@ async def next(ctx: discord.ApplicationContext) -> None:
             view=MusicView(vc.is_paused(), source_url)
             )
     else:
-        await ctx.interaction.followup.send("**queue is empty<:whiteexclamationmark_2755:1311298893866340362>**")
+        if vc.is_connected():
+            await ctx.interaction.followup.send(
+                embed=discord.Embed(
+                description="**Queue is empty.**",
+                color=discord.Color.red()
+                )
+            )
+        elif vc.is_connected()==False:
+            await ctx.send(
+                embed=discord.Embed(
+                description="**bot disconnected**",
+                color=discord.Color.red()
+                )
+            )
+            
 
 async def play_music(ctx : discord.ApplicationContext) -> None:
     """
@@ -120,9 +139,12 @@ async def play_music(ctx : discord.ApplicationContext) -> None:
     if not vc.is_playing():
         if queue:
             item=queue.popleft()
-            global source_url, Embed
+            global source_url, Embed, asource
             source_url=item[1][0]['url']
-            vc.play(discord.FFmpegPCMAudio(item[1][1], **_FFMPEG_OPTIONS), after=lambda e: print(e) if e else asyncio.run_coroutine_threadsafe(next(ctx), bot.loop))
+            esource=discord.PCMVolumeTransformer(discord.FFmpegPCMAudio(item[1][1], **_FFMPEG_OPTIONS))
+            esource.volume=0.5
+            asource=esource
+            vc.play(esource, after=lambda e: print(e) if e else asyncio.run_coroutine_threadsafe(next(ctx), bot.loop))
             embed=discord.Embed(
                 title=f"**{item[1][0]['title']}**",
                 color=discord.Color.blue()
@@ -141,7 +163,7 @@ async def play_music(ctx : discord.ApplicationContext) -> None:
                 )
             embed.set_thumbnail(url=item[1][0]['thumbnail'])
             Embed=embed
-            await ctx.interaction.followup.send(
+            await ctx.send(
                     f"⚙️ now playing **{item[1][0]['title']}** ...", 
                     embed=embed,
                     view=MusicView(False, source_url)
@@ -151,7 +173,7 @@ async def play_music(ctx : discord.ApplicationContext) -> None:
 
 @bot.slash_command(
     name="play",
-    description="play music"
+    description="Plays a song in the voice channel."
 )
 async def play(
         ctx: discord.ApplicationContext, 
@@ -165,18 +187,35 @@ async def play(
     await ctx.response.defer(invisible=False)
     global current
     if not ctx.author.voice:
-        return await ctx.respond("**Please join the voice channel first.**")
+        await ctx.interaction.followup.send(
+            embed=discord.Embed(
+                description=f"<:warn:1313125520032006164> **Please join the voice channel first.**",
+                color=discord.Color.red()
+            ),
+            ephemeral=True
+        )
     
     if voice_client:
         if ctx.author.voice.channel.id not in voice_client.keys(): 
-            return await ctx.respond("<:multiply_2716fe0f:1311300000822857789> **The bot has joined the voice channel, execute this command on the correct voice channel.**")
+            await ctx.interaction.followup.send(
+                embed=discord.Embed(
+                description="<:x_:1313130964146196490> **The bot has joined the voice channel, execute this command on the correct voice channel.**", 
+                color=discord.Color.red(),
+                ),
+                ephemeral=True
+            )
         else:
             result= await search(ctx,query)
             current=[query, result]
             queue.append([query, result])
             
             await asyncio.gather(
-                ctx.respond("<:checkmark_2714fe0f:1311300012227166268> ****The song has been added to the queue.****"), 
+                ctx.interaction.followup.send(
+                embed=discord.Embed(
+                    description=f"<:tick:1313128320812056646> **The song has been added to the queue.**",
+                    color=discord.Color.blue()
+                    )
+                ),
                 play_music(ctx)
             )
     else:     
@@ -187,13 +226,17 @@ async def play(
             current=[query, result]
             queue.append([query, result])
         else:
-            return await ctx.interaction.followup.send(f"**<:multiply_2716fe0f:1311300000822857789> The video could not be found ...**")
-        
+            await ctx.interaction.followup.send(f"**<:multiply_2716fe0f:1311300000822857789> The video could not be found ...**")
         await asyncio.gather(
-            ctx.interaction.followup.send(f"<:checkmark_2714fe0f:1311300012227166268> **The song has been added to the queue.**"),
+            ctx.interaction.followup.send(
+                embed=discord.Embed(
+                    description=f"<:tick:1313128320812056646> **The song has been added to the queue.**",
+                    color=discord.Color.blue()
+                    )
+                ),
             play_music(ctx)
         )
-        
+    
        
 @bot.event
 async def on_interaction(interaction: discord.Interaction) -> None:
@@ -210,39 +253,120 @@ async def on_interaction(interaction: discord.Interaction) -> None:
     :type interaction: discord.Interaction
     """
     if interaction.data and interaction.data.get("custom_id",False):
-        if interaction.data["custom_id"] == "resume":
-            vc=voice_client[interaction.user.voice.channel.id]
-            vc.pause()
-            try:
-                await interaction.response.edit_message(embed=Embed, view=MusicView(True, source_url))
-            except discord.errors.NotFound as e:
-                print(e)
+        if voice_client:
+            if interaction.data["custom_id"] == "resume":
+                vc=voice_client[interaction.user.voice.channel.id]
+                vc.pause()
+                try:
+                    await interaction.response.edit_message(embed=Embed, view=MusicView(True, source_url))
+                except discord.errors.NotFound as e:
+                    print(e)
+                else:
+                    await interaction.followup.send(
+                        embed=discord.Embed(
+                            description="**The bot is already disconnected**", 
+                            color=discord.Color.red()
+                        ),
+                        ephemeral=True
+                    )
 
-        elif interaction.data["custom_id"] == "pause":
-            vc=voice_client[interaction.user.voice.channel.id]
-            vc.resume()
-            await interaction.response.edit_message(embed=Embed, view=MusicView(False, source_url))
+            elif interaction.data["custom_id"] == "pause":
+                if voice_client:
+                    vc=voice_client[interaction.user.voice.channel.id]
+                    vc.resume()
+                    await interaction.response.edit_message(embed=Embed, view=MusicView(False, source_url))
+                else:
+                    await interaction.followup.send(    
+                        embed=discord.Embed(
+                            description="**The bot is already disconnected**", 
+                            color=discord.Color.red()
+                        ),
+                    )
 
-        elif interaction.data["custom_id"] == "next":
-            vc=voice_client[interaction.user.voice.channel.id]
-            if queue:
+            elif interaction.data["custom_id"] == "next":
+                
+                vc=voice_client[interaction.user.voice.channel.id]
+                if queue:
+                    vc.stop()
+                    await interaction.response.edit_message(embed=Embed, view=MusicView(False, source_url))
+                else:
+                    await asyncio.gather(
+                        interaction.response.edit_message(embed=Embed, view=MusicView(False, source_url)),
+                        interaction.followup.send(
+                            embed=discord.Embed(
+                                description="**<:warn:1313125520032006164> There's no next song in the queue**", 
+                                color=discord.Color.red()
+                            ),
+                        ephemeral=True
+                        )
+                    )
+                
+            elif interaction.data["custom_id"] == "repeat":
+                
+                vc=voice_client[interaction.user.voice.channel.id]
+                queue.appendleft(current)
                 vc.stop()
-                await interaction.response.edit_message(embed=Embed, view=MusicView(False, source_url))
-            else:
+                try:
+                    await interaction.response.edit_message(embed=Embed, view=MusicView(False, source_url))
+                except discord.errors.InteractionResponded as e:
+                    print(e)
+            
+            elif interaction.data["custom_id"] == "soundplus":
+                global asource
+                if asource.volume<1.0:
+                    asource.volume+=0.1
+                    await interaction.response.edit_message(embed=Embed, view=MusicView(False, source_url))
+                elif asource.volume>1.0:
+                    await interaction.response.edit_message(embed=Embed, view=MusicView(False, source_url))
+                    await interaction.followup.send(
+                        embed=discord.Embed(
+                            description="**<:warn:1313125520032006164> The maximum volume is reached.**",
+                            color=discord.Color.red()
+                        ),
+                        ephemeral=True
+                    )
+            
+            elif interaction.data["custom_id"] == "soundminus":
+                if asource.volume>0:
+                    asource.volume-=0.1
+                    await interaction.response.edit_message(embed=Embed, view=MusicView(False, source_url))
+                elif asource.volume<0:
+                    await interaction.response.edit_message(embed=Embed, view=MusicView(False, source_url))
+                    await interaction.followup.send(
+                        embed=discord.Embed(
+                            description="**<:warn:1313125520032006164> The minimum volume is reached.**",
+                            color=discord.Color.red()
+                        ),
+                        ephemeral=True
+                    )
+                    
+            elif interaction.data["custom_id"] == "stop":
+                vc=voice_client[interaction.user.voice.channel.id]
                 await asyncio.gather(
+                    vc.disconnect(),
                     interaction.response.edit_message(embed=Embed, view=MusicView(False, source_url)),
-                    interaction.channel.send("**queue is empty<:whiteexclamationmark_2755:1311298893866340362>**")
+                    interaction.followup.send(
+                    embed=discord.Embed(
+                    description="**bot disconnected**",
+                    color=discord.Color.red()
+                        ),
+                    )
                 )
 
-        elif interaction.data["custom_id"] == "repeat":
-            vc=voice_client[interaction.user.voice.channel.id]
-            queue.appendleft(current)
-            vc.stop()
-            try:
-                await interaction.response.edit_message(embed=Embed, view=MusicView(False, source_url))
-            except discord.errors.InteractionResponded as e:
-                print(e)
-            
+                voice_client.clear()
+        
+        else:
+            await asyncio.gather(
+                interaction.response.edit_message(embed=Embed, view=MusicView(False, source_url)),
+                interaction.followup.send(
+                    embed=discord.Embed(
+                        description="**You can't do it because of bot disconnect.**", 
+                        color=discord.Color.red()
+                    ),
+                    ephemeral=True
+                )
+            )
+    
     await bot.process_application_commands(interaction)
 
 

@@ -1,6 +1,7 @@
 import discord
 import os 
 import asyncio
+import re
 from nowon import Now
 from urllib.parse import urlparse, parse_qs
 from view import MusicView,  QueueView
@@ -41,6 +42,7 @@ async def search(
     :rtype: result
     """
     if item.startswith("https://www.youtube.com"):
+        re.findall(r"^http?s://(?:www\.)[a-zA-Z]+.com", item)
         if (audio :=await _get(item)):
             if isinstance(audio, DownloadError): 
                 await ctx.respond(audio)
@@ -51,7 +53,7 @@ async def search(
                 _data= adata(f"https://www.youtube.com/watch?v={vid_id}")
                 return [_data, audio]
         
-    else:
+    elif item:
         search= VideosSearch(item, limit=1)
         url= search.result()["result"][0]["link"]
         vid_id= id(url)

@@ -1,26 +1,24 @@
 import discord
 import os 
 import asyncio
+from nowon import Now
 from urllib.parse import urlparse, parse_qs
-from view import MusicView
+from view import MusicView,  QueueView
 from dotenv import load_dotenv
 from collections import deque
 from youtubesearchpython import VideosSearch
 from data import adata
-from typing import List, Deque, Dict
+from typing import Deque, Dict
 from source import _get
 from yt_dlp import DownloadError
 
 
 load_dotenv() 
 bot = discord.Bot()
-
+now=Now()
 voice_client:Dict= {}
 queue:Deque= deque()
-source_url:str= ""
-current:List= []
-Embed:discord.Embed= discord.Embed()
-asource:discord.PCMVolumeTransformer= ''
+
 
 _FFMPEG_OPTIONS = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5', 
@@ -82,11 +80,10 @@ async def next(ctx: discord.ApplicationContext) -> None:
     if queue:
         item=queue.popleft()
         vc=voice_client[ctx.author.voice.channel.id]
-        global source_url, Embed, asource
-        source_url=item[1][0]['url']
+        now.source_url=item[1][0]['url']
         esource=discord.PCMVolumeTransformer(discord.FFmpegPCMAudio(item[1][1], **_FFMPEG_OPTIONS))
         esource.volume=0.5
-        asource=esource
+        now.asource=esource
         vc.play(esource, after=lambda e: print(e) if e else asyncio.run_coroutine_threadsafe(next(ctx), bot.loop))
         embed=discord.Embed(
             title=f"**{item[1][0]['title']}**",
@@ -105,11 +102,11 @@ async def next(ctx: discord.ApplicationContext) -> None:
             value=f"> **{item[1][0]['author']}**"
             )
         embed.set_thumbnail(url=item[1][0]['thumbnail'])
-        Embed=embed
-        await ctx.respond(
+        now.Embed=embed
+        await ctx.send(
             f"⚙️ now playing **{item[1][0]['title']}** ...", 
             embed=embed,
-            view=MusicView(vc.is_paused(), source_url)
+            view=MusicView(vc.is_paused(), now.source_url)
             )
     else:
         if vc.is_connected():
@@ -139,11 +136,10 @@ async def play_music(ctx : discord.ApplicationContext) -> None:
     if not vc.is_playing():
         if queue:
             item=queue.popleft()
-            global source_url, Embed, asource
-            source_url=item[1][0]['url']
+            now.source_url=item[1][0]['url']
             esource=discord.PCMVolumeTransformer(discord.FFmpegPCMAudio(item[1][1], **_FFMPEG_OPTIONS))
             esource.volume=0.5
-            asource=esource
+            now.asource=esource
             vc.play(esource, after=lambda e: print(e) if e else asyncio.run_coroutine_threadsafe(next(ctx), bot.loop))
             embed=discord.Embed(
                 title=f"**{item[1][0]['title']}**",
@@ -162,11 +158,11 @@ async def play_music(ctx : discord.ApplicationContext) -> None:
                 value=f"> **{item[1][0]['author']}**"
                 )
             embed.set_thumbnail(url=item[1][0]['thumbnail'])
-            Embed=embed
+            now.Embed=embed
             await ctx.send(
                     f"⚙️ now playing **{item[1][0]['title']}** ...", 
                     embed=embed,
-                    view=MusicView(False, source_url)
+                    view=MusicView(False, now.source_url)
                     )
     else:
         pass
@@ -185,7 +181,6 @@ async def play(
     :return: None
     """
     await ctx.response.defer(invisible=False)
-    global current
     if not ctx.author.voice:
         await ctx.interaction.followup.send(
             embed=discord.Embed(
@@ -206,8 +201,8 @@ async def play(
             )
         else:
             result= await search(ctx,query)
-            current=[query, result]
-            queue.append([query, result])
+            now.current=[query, result]
+            queue.append(now.current)
             
             await asyncio.gather(
                 ctx.interaction.followup.send(
@@ -223,8 +218,8 @@ async def play(
         voice_client[ctx.author.voice.channel.id]=vc
         result= await search(ctx,query)
         if result:
-            current=[query, result]
-            queue.append([query, result])
+            now.current=[query, result]
+            queue.append(now.current)
         else:
             await ctx.interaction.followup.send(f"**<:multiply_2716fe0f:1311300000822857789> The video could not be found ...**")
         await asyncio.gather(
@@ -237,7 +232,60 @@ async def play(
             play_music(ctx)
         )
     
-       
+@bot.slash_command(
+    name="queue",   
+    description="Displays the current queue."
+    )
+async def current_queue(ctx: discord.ApplicationContext) -> None:
+    """
+    :param ctx: discord.ApplicationContext
+    :return: None
+    """
+    await ctx.response.defer(invisible=False)
+    if (group:=len(queue)//10)>=1:
+        now.data_page={f"{i+1}": list(queue)[i*10:(i+1)*10] for i in range(group)}
+        if group%10!=0:
+            now.data_page.update({f"{group+1}": list(queue)[group*10:]})
+        embed=discord.Embed(
+            footer=discord.EmbedFooter(text=f"[1/{len(now.data_page)}]"),
+            )
+        for i,s in enumerate(now.data_page[f"{now.current_queue_index}"]):
+            embed.add_field(
+                    name='',
+                    value=f"**{i+1}.** [{s[1][0]['title']}]({s[1][0]['url']}) **`[{s[1][0]['length']}]`**",
+                    inline=False
+                )
+        c= now.current_queue_index   
+        indices = [
+            c -2, 
+            c -1, 
+            c + 1, 
+            c +2
+            ]
+        
+        for i, index in enumerate(indices):
+            now.cool[i] = not bool(now.data_page.get(str(index), False))
+
+        await ctx.interaction.followup.send(embed=embed, view=QueueView(now.cool))
+
+    elif not bool(queue):
+        embed=discord.Embed(
+            description=f"<:multiply_2716fe0f:1311300000822857789> **The queue is empty.**",
+            color=discord.Color.red()
+            )
+        await ctx.interaction.followup.send(embed=embed)
+    else:
+        embed=discord.Embed(
+                footer=discord.EmbedFooter(text=f"[1/1]"),
+        )
+        for i,s in enumerate(list(queue)[:len(queue)]):
+            embed.add_field(
+                    name='',
+                    value=f"**{i+1}.** [{s[1][0]['title']}]({s[1][0]['url']}) **`[{s[1][0]['length']}]`**",
+                    inline=False
+                )
+        now.cool=[True]*4
+        await ctx.interaction.followup.send(embed=embed, view=QueueView(now.cool))
 @bot.event
 async def on_interaction(interaction: discord.Interaction) -> None:
     """
@@ -258,40 +306,24 @@ async def on_interaction(interaction: discord.Interaction) -> None:
                 vc=voice_client[interaction.user.voice.channel.id]
                 vc.pause()
                 try:
-                    await interaction.response.edit_message(embed=Embed, view=MusicView(True, source_url))
+                    await interaction.response.edit_message(embed=now.Embed, view=MusicView(True, now.source_url))
                 except discord.errors.NotFound as e:
                     print(e)
-                else:
-                    await interaction.followup.send(
-                        embed=discord.Embed(
-                            description="**The bot is already disconnected**", 
-                            color=discord.Color.red()
-                        ),
-                        ephemeral=True
-                    )
 
             elif interaction.data["custom_id"] == "pause":
-                if voice_client:
-                    vc=voice_client[interaction.user.voice.channel.id]
-                    vc.resume()
-                    await interaction.response.edit_message(embed=Embed, view=MusicView(False, source_url))
-                else:
-                    await interaction.followup.send(    
-                        embed=discord.Embed(
-                            description="**The bot is already disconnected**", 
-                            color=discord.Color.red()
-                        ),
-                    )
-
+                vc=voice_client[interaction.user.voice.channel.id]
+                vc.resume()
+                await interaction.response.edit_message(embed=now.Embed, view=MusicView(False, now.source_url))
+                
             elif interaction.data["custom_id"] == "next":
                 
                 vc=voice_client[interaction.user.voice.channel.id]
                 if queue:
                     vc.stop()
-                    await interaction.response.edit_message(embed=Embed, view=MusicView(False, source_url))
+                    await interaction.response.edit_message(embed=now.Embed, view=MusicView(False, now.source_url))
                 else:
                     await asyncio.gather(
-                        interaction.response.edit_message(embed=Embed, view=MusicView(False, source_url)),
+                        interaction.response.edit_message(embed=now.Embed, view=MusicView(False, now.source_url)),
                         interaction.followup.send(
                             embed=discord.Embed(
                                 description="**<:warn:1313125520032006164> There's no next song in the queue**", 
@@ -304,20 +336,19 @@ async def on_interaction(interaction: discord.Interaction) -> None:
             elif interaction.data["custom_id"] == "repeat":
                 
                 vc=voice_client[interaction.user.voice.channel.id]
-                queue.appendleft(current)
+                queue.appendleft(now.current)
                 vc.stop()
                 try:
-                    await interaction.response.edit_message(embed=Embed, view=MusicView(False, source_url))
+                    await interaction.response.edit_message(embed=now.Embed, view=MusicView(False, now.source_url))
                 except discord.errors.InteractionResponded as e:
                     print(e)
             
             elif interaction.data["custom_id"] == "soundplus":
-                global asource
-                if asource.volume<1.0:
-                    asource.volume+=0.1
-                    await interaction.response.edit_message(embed=Embed, view=MusicView(False, source_url))
-                elif asource.volume>1.0:
-                    await interaction.response.edit_message(embed=Embed, view=MusicView(False, source_url))
+                if now.asource.volume<1.0:
+                    now.asource.volume+=0.1
+                    await interaction.response.edit_message(embed=now.Embed, view=MusicView(False, now.source_url))
+                elif now.asource.volume>1.0:
+                    await interaction.response.edit_message(embed=now.Embed, view=MusicView(False, now.source_url))
                     await interaction.followup.send(
                         embed=discord.Embed(
                             description="**<:warn:1313125520032006164> The maximum volume is reached.**",
@@ -327,11 +358,11 @@ async def on_interaction(interaction: discord.Interaction) -> None:
                     )
             
             elif interaction.data["custom_id"] == "soundminus":
-                if asource.volume>0:
-                    asource.volume-=0.1
-                    await interaction.response.edit_message(embed=Embed, view=MusicView(False, source_url))
-                elif asource.volume<0:
-                    await interaction.response.edit_message(embed=Embed, view=MusicView(False, source_url))
+                if now.asource.volume>0:
+                    now.asource.volume-=0.1
+                    await interaction.response.edit_message(embed=now.Embed, view=MusicView(False, now.source_url))
+                elif now.asource.volume<0:
+                    await interaction.response.edit_message(embed=now.Embed, view=MusicView(False, now.source_url))
                     await interaction.followup.send(
                         embed=discord.Embed(
                             description="**<:warn:1313125520032006164> The minimum volume is reached.**",
@@ -344,7 +375,7 @@ async def on_interaction(interaction: discord.Interaction) -> None:
                 vc=voice_client[interaction.user.voice.channel.id]
                 await asyncio.gather(
                     vc.disconnect(),
-                    interaction.response.edit_message(embed=Embed, view=MusicView(False, source_url)),
+                    interaction.response.edit_message(embed=now.Embed, view=MusicView(False, now.source_url)),
                     interaction.followup.send(
                     embed=discord.Embed(
                     description="**bot disconnected**",
@@ -352,20 +383,111 @@ async def on_interaction(interaction: discord.Interaction) -> None:
                         ),
                     )
                 )
-
                 voice_client.clear()
-        
+
+            elif interaction.data["custom_id"] == "chevronsleft":
+                now.current_queue_index-=2
+                embed=discord.Embed(
+                    footer=discord.EmbedFooter(text=f"[{now.current_queue_index}/{len(now.data_page)}]"),
+                )
+                if now.data_page.get(f"{now.current_queue_index}"):
+                    for i,s  in enumerate(now.data_page[f"{now.current_queue_index}"]):
+                        embed.add_field(
+                            name='',
+                            value=f"**{i+1}.** [{s[1][0]['title']}]({s[1][0]['url']}) **`[{s[1][0]['length']}]`**",
+                            inline=False
+                        )
+                        c= now.current_queue_index
+                    indices = [
+                        c -2, 
+                        c -1, 
+                        c + 1,     
+                        c +2
+                        ]
+                    for i, index in enumerate(indices):
+                        now.cool[i] = not bool(now.data_page.get(str(index), False))
+                    await interaction.response.edit_message(embed=embed, view=QueueView(now.cool))
+            
+            elif interaction.data["custom_id"] == "chevronleft":
+                now.current_queue_index-=1
+                embed=discord.Embed(
+                    footer=discord.EmbedFooter(text=f"[{now.current_queue_index}/{len(now.data_page)}]"),
+                )
+                if now.data_page.get(f"{now.current_queue_index}"):
+                    for i,s  in enumerate(now.data_page[f"{now.current_queue_index}"]):
+                        embed.add_field(
+                            name='',
+                            value=f"**{i+1}.** [{s[1][0]['title']}]({s[1][0]['url']}) **`[{s[1][0]['length']}]`**",
+                            inline=False
+                        )
+
+                    c= now.current_queue_index
+                    indices = [
+                        c -2, 
+                        c -1, 
+                        c + 1,     
+                        c +2
+                        ]
+                    for i, index in enumerate(indices):
+                        now.cool[i] = not bool(now.data_page.get(str(index), False))
+                    await interaction.response.edit_message(embed=embed, view=QueueView(now.cool))
+                
+            elif interaction.data["custom_id"] == "chevronright":
+
+                now.current_queue_index+=1
+                embed=discord.Embed(
+                    footer=discord.EmbedFooter(text=f"[{now.current_queue_index}/{len(now.data_page)}]"),
+                )
+                if now.data_page.get(f"{now.current_queue_index}"):
+                    for i,s  in enumerate(now.data_page[f"{now.current_queue_index}"]):
+                        embed.add_field(
+                            name='',
+                            value=f"**{i+1}.** [{s[1][0]['title']}]({s[1][0]['url']}) **`[{s[1][0]['length']}]`**",
+                            inline=False
+                        )
+                    c= now.current_queue_index
+                    indices = [
+                        c -2, 
+                        c -1, 
+                        c + 1, 
+                        c +2
+                        ]
+                    for i, index in enumerate(indices):
+                        now.cool[i] = not bool(now.data_page.get(str(index), False))
+                    await interaction.response.edit_message(embed=embed, view=QueueView(now.cool))
+            
+            elif interaction.data["custom_id"] == "chevronsright":
+                now.current_queue_index+=2
+                embed=discord.Embed(
+                    footer=discord.EmbedFooter(text=f"[{now.current_queue_index}/{len(now.data_page)}]"),
+                )
+                if now.data_page.get(f"{now.current_queue_index}"):    
+                    for i,s  in enumerate(now.data_page[f"{now.current_queue_index}"]):
+                        embed.add_field(
+                            name='',
+                            value=f"**{i+1}.** [{s[1][0]['title']}]({s[1][0]['url']}) **`[{s[1][0]['length']}]`**",
+                            inline=False
+                        )
+                    c= now.current_queue_index
+                    indices = [
+                        c -2, 
+                        c -1, 
+                        c + 1,     
+                        c +2
+                        ]
+                    for i, index in enumerate(indices):
+                        now.cool[i] = not bool(now.data_page.get(str(index), False))
+                    await interaction.response.edit_message(embed=embed, view=QueueView(now.cool))
+               
         else:
-            await asyncio.gather(
-                interaction.response.edit_message(embed=Embed, view=MusicView(False, source_url)),
-                interaction.followup.send(
+            await interaction.followup.send(
                     embed=discord.Embed(
-                        description="**You can't do it because of bot disconnect.**", 
+                        description="**<:warn:1313125520032006164> You can't do it because of bot disconnect.**", 
                         color=discord.Color.red()
                     ),
                     ephemeral=True
                 )
-            )
+            
     
     await bot.process_application_commands(interaction)
 
